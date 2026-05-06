@@ -13,15 +13,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ▶▶  CONFIGURATION
-# ═════════════════════════════════════════════════════════════════════════════
+from config import FICHIER_JSON_BIOMETRIE, OUTPUT_GRAPHS, SAUVEGARDER
 
-FICHIER_BIOMETRIE = "biometrie_extraite.json"
-SAUVEGARDER       = False   # True = PNG sur disque, False = fenêtre interactive
+# FICHIER_BIOMETRIE → output/csv/biometrie_extraite.json
+# SAUVEGARDER       → False = fenêtre interactive, True = PNG dans output/graphs/
 
-# ═════════════════════════════════════════════════════════════════════════════
-
+FICHIER_BIOMETRIE = FICHIER_JSON_BIOMETRIE
 
 def load_biometrie() -> pd.DataFrame:
     with open(FICHIER_BIOMETRIE, encoding="utf-8") as f:
@@ -31,7 +28,6 @@ def load_biometrie() -> pd.DataFrame:
     df["NOM_norm"]    = df["NOM"].str.split(",").str[0].str.strip().str.upper()
     df["PRENOM_norm"] = df["NOM"].str.split(",").str[1].str.strip().str.upper().fillna("")
     return df.sort_values("DateMesure").reset_index(drop=True)
-
 
 def choisir_patient(df: pd.DataFrame) -> tuple[str, str, pd.Timestamp]:
     patients = (
@@ -81,7 +77,6 @@ def plot_al(df: pd.DataFrame, nom_norm: str, prenom_norm: str, dob: pd.Timestamp
     dob_str = dob.strftime("%d/%m/%Y") if pd.notna(dob) else "?"
     n = len(pat)
 
-    # ── Figure ───────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(12, 5))
     fig.patch.set_facecolor("#0f172a")
     ax.set_facecolor("#111827")
@@ -119,7 +114,6 @@ def plot_al(df: pd.DataFrame, nom_norm: str, prenom_norm: str, dob: pd.Timestamp
                 ha="center",
             )
 
-    # ── Axe X ────────────────────────────────────────────────────────────────
     if n > 1:
         date_range = (pat["DateMesure"].max() - pat["DateMesure"].min()).days
         if date_range > 365 * 10:
@@ -134,7 +128,6 @@ def plot_al(df: pd.DataFrame, nom_norm: str, prenom_norm: str, dob: pd.Timestamp
 
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=35, ha="right", fontsize=9)
 
-    # ── Axe Y ────────────────────────────────────────────────────────────────
     all_al = pd.concat([od["AL_OD"], og["AL_OG"]]).dropna()
     ax.set_ylim(all_al.min() - 0.3, all_al.max() + 0.3)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f} mm"))
@@ -142,7 +135,6 @@ def plot_al(df: pd.DataFrame, nom_norm: str, prenom_norm: str, dob: pd.Timestamp
     for spine in ax.spines.values():
         spine.set_edgecolor("#1e293b")
 
-    # ── Labels ───────────────────────────────────────────────────────────────
     ax.set_xlabel("Date de mesure", color="#94a3b8", fontsize=10, labelpad=8)
     ax.set_ylabel("Longueur axiale (mm)", color="#94a3b8", fontsize=10, labelpad=8)
     ax.set_title(
@@ -150,11 +142,9 @@ def plot_al(df: pd.DataFrame, nom_norm: str, prenom_norm: str, dob: pd.Timestamp
         color="#e2e8f0", fontsize=13, fontweight="bold", pad=14
     )
 
-    # ── Légende ──────────────────────────────────────────────────────────────
     ax.legend(fontsize=8, framealpha=0.25, facecolor="#0f172a",
               edgecolor="#1e293b", labelcolor="#94a3b8", loc="upper left")
 
-    # ── Stats ─────────────────────────────────────────────────────────────────
     if not od.empty and len(od) > 1:
         delta_od = od["AL_OD"].iloc[-1] - od["AL_OD"].iloc[0]
         duree = (od["DateMesure"].max() - od["DateMesure"].min()).days / 365.25
@@ -170,14 +160,14 @@ def plot_al(df: pd.DataFrame, nom_norm: str, prenom_norm: str, dob: pd.Timestamp
     plt.tight_layout()
 
     if SAUVEGARDER:
-        outpath = Path(f"al_{nom_norm}.png")
+        OUTPUT_GRAPHS.mkdir(parents=True, exist_ok=True)
+        outpath = OUTPUT_GRAPHS / f"al_{nom_norm}.png"
         fig.savefig(outpath, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         print(f"  Sauvegardé : {outpath}")
     else:
         plt.show()
 
     plt.close(fig)
-
 
 def main():
     if not Path(FICHIER_BIOMETRIE).exists():
@@ -187,12 +177,10 @@ def main():
     df = load_biometrie()
     print(f"  {len(df)} mesure(s), {df['NOM_norm'].nunique()} patient(s)")
     
-
     nom, prenom, dob = choisir_patient(df)
     print(f"\n▶ Tracé pour {nom}…")
     plot_al(df, nom, prenom, dob)
     print("✓ Terminé.")
-
 
 if __name__ == "__main__":
     main()

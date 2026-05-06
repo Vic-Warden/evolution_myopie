@@ -2,6 +2,23 @@
 
 Ensemble de scripts Python pour l'extraction, l'analyse et la visualisation de données ophtalmologiques, spécifiquement dédiés au suivi de la myopie et de l'allongement axial de l'œil.
 
+## Structure du projet
+
+```
+evolution_myopie/
+├── config.py               ← ⚙️  Configuration centralisée (chemins & paramètres)
+├── extraire_biometrie.py   ← Étape 1 : extraction PDF → CSV/JSON
+├── suivi_al.py             ← Étape 2 : graphe longueur axiale
+├── suivi_myopie.py         ← Étape 3 : graphe réfraction longitudinale
+├── requirements.txt
+├── data/
+│   ├── pdf/                ← 📄 Placez ici les PDFs biométrie (MMT-Full_*.pdf)
+│   └── json/               ← 📄 Placez ici Patients.json, Consultation.json, tREFRACTION.json
+└── output/
+    ├── csv/                ← 📊 biometrie_extraite.csv / .json (généré automatiquement)
+    └── graphs/             ← 🖼️  PNGs générés (si SAUVEGARDER=True dans config.py)
+```
+
 ## Vue d'ensemble
 
 Ce projet traite trois étapes clés du suivi ophtalmologique :
@@ -17,17 +34,11 @@ Ce projet traite trois étapes clés du suivi ophtalmologique :
 ### 1. `extraire_biometrie.py`
 **Extraction de données biométriques depuis PDFs**
 
-Parcourt un dossier contenant des PDFs de biométrie (format "MMT-Full_*.pdf") et extrait :
-- Nom du patient
-- Date de naissance
-- Date de mesure (détectée du nom de fichier ou du texte PDF)
-- Longueur axiale composite OD (droit) et OG (gauche) en mm
+Parcourt `data/pdf/` et extrait :
+- Nom du patient, date de naissance, date de mesure
+- Longueur axiale composite OD et OG en mm
 
-**Configuration :**
-- `DOSSIER_PDF` : chemin vers les PDFs (défaut : `c:\Stage\database\pdf`)
-- `FICHIER_CSV` : fichier de sortie (défaut : `biometrie_extraite.csv`)
-
-**Sortie :** CSV avec colonnes `[fichier, NOM, DateNaissance, DateMesure, AL_OD, AL_OG]`
+**Sortie :** `output/csv/biometrie_extraite.csv`
 
 **Dépendances :** `pdfplumber`, `pandas`
 
@@ -36,18 +47,11 @@ Parcourt un dossier contenant des PDFs de biométrie (format "MMT-Full_*.pdf") e
 ### 2. `suivi_al.py`
 **Visualisation de l'axial length longitudinale**
 
-Trace le suivi temporel de la longueur axiale (AL) pour chaque patient. Affiche :
-- L'évolution de l'AL OD et OG sur le temps
-- Une zone référence pour un globe normal (22–24 mm)
-- La pente annuelle d'allongement (indicateur de progression myopique)
+Trace le suivi temporel de la longueur axiale (AL) pour chaque patient.
 
-**Configuration :**
-- `FICHIER_BIOMETRIE` : source des données (défaut : `biometrie_extraite.json`)
-- `SAUVEGARDER` : True = PNG sur disque, False = fenêtre interactive
+**Source :** `output/csv/biometrie_extraite.json`
 
-**Flux :**
-1. Charge `biometrie_extraite.json`
-2. Menu de sélection du patient
+**Dépendances :** `pandas`, `matplotlib`
 3. Graphe interactif montrant l'évolution d'AL en fonction de la date
 
 **Dépendances :** `pandas`, `matplotlib`
@@ -57,23 +61,9 @@ Trace le suivi temporel de la longueur axiale (AL) pour chaque patient. Affiche 
 ### 3. `suivi_myopie.py`
 **Suivi longitudinal de l'équivalent sphérique (réfraction)**
 
-Visualise l'évolution de la réfraction (équivalent sphérique) à partir d'une base de données ophtalmologique structurée.
+Visualise l'évolution de la réfraction à partir des JSONs dans `data/json/`.
 
-**Configuration :**
-- `FICHIER_PATIENTS` : données patients (défaut : `Patients.json`)
-- `FICHIER_CONSULTATIONS` : historique des consultations (défaut : `Consultation.json`)
-- `FICHIER_REFRACTION` : mesures réfractives (défaut : `tREFRACTION.json`)
-- `FICHIER_BIOMETRIE` : optionnel, pour enrichissement (défaut : `biometrie_extraite.json`)
-- `TYPEREF` : filtrer par type de réfraction (6=Autoréfractomètre, 7=Subjectif, 16=Finale, None=tous)
-- `MODE_COHORTE` : True = superpose toutes les courbes, False = graphe par patient
-- `OEIL_COHORTE` : "D" ou "G" en mode cohorte
-- `SAUVEGARDER` : True = PNG, False = fenêtre interactive
-
-**Flux :**
-1. Charge les 3 fichiers JSON (Patients, Consultations, tREFRACTION)
-2. Jointure Patient → Consultation → Réfraction
-3. Calcul de l'équivalent sphérique (SE = Sphère + Cylindre/2)
-4. Visualisation par patient ou en cohorte
+**Sources :** `data/json/Patients.json`, `Consultation.json`, `tREFRACTION.json`
 
 **Dépendances :** `pandas`, `matplotlib`
 
@@ -102,19 +92,19 @@ Graphe réfraction longitudinale
 ## Installation
 
 ### Prérequis
-- Python 3.8+
-- pip
+- Python 3.10+
 
 ### Dépendances
 ```bash
-pip install pdfplumber pandas matplotlib
+pip install -r requirements.txt
 ```
 
 ### Setup
 1. Cloner le dépôt
-2. Configurer les chemins dans chaque script (variables en haut)
-3. Placer les données sources (PDFs ou JSONs) aux emplacements configurés
-4. Exécuter les scripts dans l'ordre
+2. Installer les dépendances (voir ci-dessus)
+3. Placer les PDFs dans `data/pdf/` et les JSONs dans `data/json/`
+4. Ajuster les paramètres dans **`config.py`** si nécessaire
+5. Exécuter les scripts dans l'ordre
 
 ---
 

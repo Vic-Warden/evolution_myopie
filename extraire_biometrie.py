@@ -19,22 +19,15 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ▶▶  CONFIGURATION
-# ═════════════════════════════════════════════════════════════════════════════
+from config import DOSSIER_PDF, FICHIER_CSV_BIOMETRIE as FICHIER_CSV, OUTPUT_CSV
 
-DOSSIER_PDF  = "c:\\Stage\\database\\pdf"   # dossier contenant les PDFs
-FICHIER_CSV  = "biometrie_extraite.csv" # fichier de sortie
+# DOSSIER_PDF  → data/pdf/          (PDFs biométrie MMT-Full_*.pdf)
+# FICHIER_CSV  → output/csv/biometrie_extraite.csv
 
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-# ── Patterns regex ────────────────────────────────────────────────────────────
 RE_AL        = re.compile(r"Comp\.\s*AL\s*:\s*([\d.]+)\s*mm")
 RE_NOM       = re.compile(r"Nom\s*:\s*(.+)")
 RE_DOB       = re.compile(r"Date de naissance\s*:\s*(\d{2}/\d{2}/\d{4})")
 RE_DATE_PDF  = re.compile(r"Date de mesure\s*[^:]*:\s*(\d{2}/\d{2}/\d{4})")
-
 
 def date_depuis_nom_fichier(nom: str) -> str | None:
     """
@@ -49,7 +42,6 @@ def date_depuis_nom_fichier(nom: str) -> str | None:
         except ValueError:
             return None
     return None
-
 
 def extraire_pdf(pdf_path: Path) -> dict:
     """
@@ -82,7 +74,6 @@ def extraire_pdf(pdf_path: Path) -> dict:
         "AL_OD":         float(valeurs_al[0]) if len(valeurs_al) > 0 else None,
         "AL_OG":         float(valeurs_al[1]) if len(valeurs_al) > 1 else None,
     }
-
 
 def extraire_dossier(dossier: str) -> pd.DataFrame:
     """
@@ -120,14 +111,12 @@ def extraire_dossier(dossier: str) -> pd.DataFrame:
 
     return df
 
-
 def main():
     df = extraire_dossier(DOSSIER_PDF)
 
     if df.empty:
         return
 
-    # ── Résumé ────────────────────────────────────────────────────────────────
     print("─" * 50)
     print(f"  Total extraits  : {len(df)}")
     print(f"  AL OD manquant  : {df['AL_OD'].isna().sum()}")
@@ -136,11 +125,10 @@ def main():
     print(f"  OG moyen        : {df['AL_OG'].mean():.2f} mm")
     print("─" * 50)
 
-    # ── Sauvegarde CSV ────────────────────────────────────────────────────────
+    OUTPUT_CSV.mkdir(parents=True, exist_ok=True)
     df.to_csv(FICHIER_CSV, index=False, encoding="utf-8-sig")
     print(f"\n✓ Résultats sauvegardés : {FICHIER_CSV}")
     print(df.to_string(index=False))
-
 
 if __name__ == "__main__":
     main()
