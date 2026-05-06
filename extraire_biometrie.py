@@ -11,6 +11,7 @@ Le résultat est sauvegardé en CSV pour jointure ultérieure
 avec la base ophtalmologique.
 
 Dépendances : pip install pdfplumber pandas
+documents non inclus dans le dépôt (données sensibles)
 """
 
 import re
