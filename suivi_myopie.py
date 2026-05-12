@@ -175,27 +175,22 @@ def build_history(
     full = full[full["CodePatient"].isin(valid_patients)]
 
     full = full.sort_values(["CodePatient", "Date"]).reset_index(drop=True)
-<<<<<<< HEAD
-    print(f"  Historique : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
-=======
 
     # Print the list of retained patients
     print("\n  PATIENTS UNDER 25 WITH AT LEAST 2 MEASUREMENTS\n")
     for pid in valid_patients:
-        
+
         # Retrieve the first row for this patient to get name info
         pat_info = full[full["CodePatient"] == str(pid)].iloc[0]
-        
+
         # Get the number of distinct measurement dates for this patient
         nb_measurements = measurements_per_patient[pid]
-        
+
         # Display patient ID, name and measurement count
         print(f"  ID: {pid:<10} | {pat_info['Prenom']:<10} {pat_info['NOM']:<15} | {nb_measurements} measurements")
     print()
 
-
-    print(f"  Historique construit : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
->>>>>>> 2b85acc (docs: add inline comments and remove separators in build_history)
+    print(f"  Historique : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
     return full
 
 
