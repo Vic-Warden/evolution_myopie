@@ -23,7 +23,7 @@ from pathlib import Path
 FICHIER_MDB       = r"C:\Stage\database\baseSQL\PUBLIC.MDB"
 DOSSIER_PDF       = r"c:\Stage\database\donnés_pdf"
 
-PATIENT_IDS  = [66844742]  # [1758507609] = forcer 
+PATIENT_IDS  = None  # [1758507609] = forcer 
 TYPEREF      = 7      # 7 = Réfraction subjective 6 = Réfraction automatique, None = tous types
 MODE_COHORTE = False
 OEIL_COHORTE = "D"
