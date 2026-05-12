@@ -3,13 +3,17 @@ Suivi longitudinal de la myopie
 ================================
 Lecture depuis PUBLIC.MDB + biométrie depuis PDFs liés via Documents.json
 
-Dépendances : pip install pandas matplotlib pyodbc pdfplumber
+Dépendances : pip install pandas matplotlib pyodbc pdfplumber pywin32
 Driver requis : Microsoft Access Database Engine 2016 (64 bits)
 https://www.microsoft.com/en-us/download/details.aspx?id=54920
 """
 
 import json
 import re
+import sys
+import time
+import logging
+import os
 from pathlib import Path
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -27,12 +31,129 @@ SAUVEGARDER  = False
 
 # ═════════════════════════════════════════════════════════════════════════════
 
+# Write logs to both the console and ~/evolution_myopie/suivi.log
+_LOG_DIR  = os.path.join(os.path.expanduser("~"), "evolution_myopie")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_LOG_FILE = os.path.join(_LOG_DIR, "suivi.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+log = logging.getLogger("suivi_myopie")
+
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.dates as mdates
 import pyodbc
 import pdfplumber
+
+
+# Try to import win32com to detect the active patient in Access via COM Interop.
+# If pywin32 is not installed, COM auto-detection is simply disabled.
+_ACCESS_FIELD_CODE   = "Code patient"
+_ACCESS_FIELD_NOM    = "NOM"
+_ACCESS_FIELD_PRENOM = "Prénom"
+
+try:
+    import win32com.client as _win32
+    _WIN32_AVAILABLE = True
+except ImportError:
+    _WIN32_AVAILABLE = False
+    log.warning("pywin32 not available — COM auto-detection disabled.")
+
+
+def get_active_patient() -> dict | None:
+    """
+    Attempts to read the currently open patient from Access via COM Interop.
+    Returns {"code": str, "nom": str, "prenom": str} or None if Access is
+    closed, no form is active, or win32com is unavailable.
+    """
+    if not _WIN32_AVAILABLE:
+        return None
+    try:
+        access = _win32.GetActiveObject("Access.Application")
+        form   = access.Screen.ActiveForm
+        if form is None:
+            return None
+
+        target = {_ACCESS_FIELD_CODE, _ACCESS_FIELD_NOM, _ACCESS_FIELD_PRENOM}
+        data: dict = {}
+
+        for i in range(form.Controls.Count):
+            ctrl = form.Controls(i)
+            try:
+                if str(ctrl.Name) in target:
+                    data[ctrl.Name] = ctrl.Value
+            except Exception:
+                pass
+
+        if not target.issubset(data.keys()):
+            log.debug("COM: active form found but required fields missing.")
+            return None
+
+        return {
+            "code":   str(data[_ACCESS_FIELD_CODE]),
+            "nom":    str(data[_ACCESS_FIELD_NOM]),
+            "prenom": str(data[_ACCESS_FIELD_PRENOM]),
+        }
+
+    except Exception as e:
+        log.debug(f"COM error while reading active patient: {e}")
+        return None
+
+
+# Poll a path until it becomes reachable or the timeout expires.
+# Useful when the database / PDF folder lives on a NAS that may not be
+# immediately mounted on Windows startup.
+_PATH_POLL_INTERVAL = 5   # seconds between retries
+_PATH_TIMEOUT       = 120 # total seconds before giving up
+
+
+def wait_for_path(path: str, label: str = "") -> bool:
+    """
+    Waits until *path* is accessible on the filesystem (local or UNC/NAS).
+    Returns True as soon as the path exists, False if *_PATH_TIMEOUT* is
+    exceeded.  Logs a warning on the first failed attempt so the user knows
+    the script is waiting rather than hanging silently.
+    """
+    p           = Path(path)
+    label_str   = f"[{label}] " if label else ""
+    first_check = True
+    deadline    = time.monotonic() + _PATH_TIMEOUT
+
+    while True:
+        try:
+            if p.exists():
+                if not first_check:
+                    log.info(f"{label_str}Path is now reachable: {path}")
+                return True
+        except Exception:
+            pass  # OSError on unreachable UNC share — treat as not yet ready
+
+        if time.monotonic() >= deadline:
+            log.error(
+                f"{label_str}Path unreachable after {_PATH_TIMEOUT} s — "
+                f"aborting. Check NAS / network mount: {path}"
+            )
+            return False
+
+        if first_check:
+            log.warning(
+                f"{label_str}Path not yet reachable, retrying every "
+                f"{_PATH_POLL_INTERVAL} s (timeout {_PATH_TIMEOUT} s): {path}"
+            )
+            first_check = False
+
+        time.sleep(_PATH_POLL_INTERVAL)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. LECTURE BASE MDB
@@ -57,7 +178,7 @@ def load_table(conn: pyodbc.Connection, table: str) -> pd.DataFrame:
 
 
 def load_all_tables(patient_ids: list[str] | None = None):
-    print(f"▶ Connexion à {FICHIER_MDB}…")
+    log.info(f"▶ Connexion à {FICHIER_MDB}…")
     conn = connect_mdb(FICHIER_MDB)
     df_pat = load_table(conn, "Patients")
 
@@ -76,7 +197,7 @@ def load_all_tables(patient_ids: list[str] | None = None):
         df_ref = load_table(conn, "tREFRACTION")
 
     conn.close()
-    print(f"  patients={len(df_pat)}  consultations={len(df_con)}  réfractions={len(df_ref)}")
+    log.info(f"  patients={len(df_pat)}  consultations={len(df_con)}  réfractions={len(df_ref)}")
     return df_pat, df_con, df_ref
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -140,7 +261,7 @@ def build_history(
     # Étape 2 : Filtre TypeRef
     if typeref is not None:
         merged = merged[merged["TypeRef"].astype(str) == str(typeref)]
-        print(f"  [TypeRef={typeref}] {len(merged)} lignes retenues")
+        log.info(f"  [TypeRef={typeref}] {len(merged)} lignes retenues")
 
     # Étape 3 : Jointure ↔ Patient
     pat_slim = df_patients[["Code patient", "NOM", "Prénom", "Date de Naissance"]].copy()
@@ -197,9 +318,10 @@ def build_history(
     glasses_patients = set(ref_full[glasses_mask]["CodePatient"].astype(str).unique())
 
     # Print the list of retained patients
-    print("\n" + "═" * 70)
-    print("  PATIENTS UNDER 25 WITH AT LEAST 2 MEASUREMENTS")
-    print("═" * 70)
+    log.info("\n" + "═" * 70)
+    log.info("  PATIENTS UNDER 25 WITH AT LEAST 2 MEASUREMENTS")
+    log.info("═" * 70)
+
     for pid in valid_patients:
 
         # Retrieve the first row for this patient to get name info
@@ -211,10 +333,10 @@ def build_history(
         # Check whether this patient is inferred as a glasses wearer
         wears_glasses = "Yes" if str(pid) in glasses_patients else "Unknown/No"
 
-        print(f"  ID: {pid:<10} | {pat_info['Prenom']:<10} {pat_info['NOM']:<15} | {nb_measurements} measurements | Glasses: {wears_glasses}")
-    print("═" * 70 + "\n")
+        log.info(f"  ID: {pid:<10} | {pat_info['Prenom']:<10} {pat_info['NOM']:<15} | {nb_measurements} measurements | Glasses: {wears_glasses}")
+    log.info("═" * 70 + "\n")
 
-    print(f"  Historique : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
+    log.info(f"  Historique : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
     return full
 
 
@@ -261,12 +383,12 @@ def extraire_al_pdf(pdf_path: str) -> tuple[float | None, float | None]:
         og = float(valeurs[1]) if len(valeurs) > 1 else None
         return od, og
     except Exception as e:
-        print(f"    ⚠  {Path(pdf_path).name} : {e}")
+        log.warning(f"    ⚠  {Path(pdf_path).name} : {e}")
         return None, None
 
 
 def load_biometrie(patient_ids: list[str] | None = None) -> pd.DataFrame:
-    print(f"▶ Chargement de la biométrie depuis {FICHIER_MDB}…")
+    log.info(f"▶ Chargement de la biométrie depuis {FICHIER_MDB}…")
     conn = connect_mdb(FICHIER_MDB)
 
     if patient_ids:
@@ -281,16 +403,16 @@ def load_biometrie(patient_ids: list[str] | None = None) -> pd.DataFrame:
 
     col = "Photo externe"
     if col not in docs.columns:
-        print(f"  ⚠  Colonne '{col}' absente de la table Documents")
+        log.warning(f"  ⚠  Colonne '{col}' absente de la table Documents")
         return pd.DataFrame()
 
     mmt = docs[docs[col].astype(str).str.contains("MMT", na=False)].copy()
 
     if mmt.empty:
-        print("  ⚠  Aucun fichier MMT trouvé dans Documents.json")
+        log.warning("  ⚠  Aucun fichier MMT trouvé dans Documents.json")
         return pd.DataFrame()
 
-    print(f"  {len(mmt)} PDF(s) MMT référencé(s) dans Documents.json")
+    log.info(f"  {len(mmt)} PDF(s) MMT référencé(s) dans Documents.json")
 
     resultats = []
     for _, row in mmt.iterrows():
@@ -303,11 +425,11 @@ def load_biometrie(patient_ids: list[str] | None = None) -> pd.DataFrame:
         pdf_path = Path(DOSSIER_PDF) / chemin_relatif.lstrip("\\")
 
         if not pdf_path.exists():
-            print(f"    ⚠  PDF introuvable : {pdf_path}")
+            log.warning(f"    ⚠  PDF introuvable : {pdf_path}")
             al_od, al_og = None, None
         else:
             al_od, al_og = extraire_al_pdf(str(pdf_path))
-            print(f"    ✓  {nom_pdf}  →  OD={al_od}  OG={al_og}")
+            log.info(f"    ✓  {nom_pdf}  →  OD={al_od}  OG={al_og}")
 
         resultats.append({
             "CodePatient": str(code_patient) if code_patient else None,
@@ -320,7 +442,7 @@ def load_biometrie(patient_ids: list[str] | None = None) -> pd.DataFrame:
     df_al = pd.DataFrame(resultats)
     n_match = df_al["CodePatient"].notna().sum()
     n_al    = df_al["AL_OD"].notna().sum()
-    print(f"  Biométrie : {n_match} patient(s) identifié(s), {n_al} AL extraite(s)")
+    log.info(f"  Biométrie : {n_match} patient(s) identifié(s), {n_al} AL extraite(s)")
     return df_al
 
 
@@ -377,7 +499,7 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
     pat = pat[pat[["SE_D", "SE_G"]].notna().any(axis=1)].sort_values("Date")
 
     if pat.empty:
-        print(f"  Aucune donnée valide pour le patient {code_patient}")
+        log.warning(f"  Aucune donnée valide pour le patient {code_patient}")
         return
 
     nom    = pat["NOM"].iloc[0]    if "NOM"    in pat.columns else "?"
@@ -486,7 +608,7 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
     if save:
         outpath = Path(output_dir) / f"myopie_patient_{code_patient}.png"
         fig.savefig(outpath, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        print(f"  Sauvegardé : {outpath}")
+        log.info(f"  Sauvegardé : {outpath}")
     else:
         plt.show()
     plt.close(fig)
@@ -529,7 +651,7 @@ def plot_cohort(df, patient_ids=None, eye="D", save=False, output_dir="."):
     if save:
         outpath = Path(output_dir) / "myopie_cohorte.png"
         fig.savefig(outpath, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        print(f"  Sauvegardé : {outpath}")
+        log.info(f"  Sauvegardé : {outpath}")
     else:
         plt.show()
     plt.close(fig)
@@ -618,22 +740,68 @@ def choisir_patients(df: pd.DataFrame) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # Chargement depuis MDB
-    ids_config = [str(i) for i in PATIENT_IDS] if PATIENT_IDS else None
+    log.info("=" * 70)
+    log.info("  Suivi myopie — démarrage")
+    log.info(f"  Log : {_LOG_FILE}")
+    log.info("=" * 70)
 
+    # -------------------------------------------------------------------------
+    # PRODUCTION PATTERN 3 — Path availability guard
+    # Check that FICHIER_MDB and DOSSIER_PDF are reachable before doing anything
+    # else.  Useful when the database or PDF folder lives on a NAS that may take
+    # a few seconds to mount on Windows startup.
+    # -------------------------------------------------------------------------
+    if not wait_for_path(FICHIER_MDB, label="MDB"):
+        log.error("Cannot reach FICHIER_MDB — aborting.")
+        sys.exit(1)
+
+    if not wait_for_path(DOSSIER_PDF, label="PDF"):
+        log.error("Cannot reach DOSSIER_PDF — aborting.")
+        sys.exit(1)
+    # -------------------------------------------------------------------------
+
+    # -------------------------------------------------------------------------
+    # PRODUCTION PATTERN 2 — COM auto-detection of the active patient
+    # If Access is open and a patient record is displayed, bypass the
+    # interactive menu and generate the chart directly for that patient.
+    # Falls back to choisir_patients() if Access is closed or no patient is
+    # open.
+    # -------------------------------------------------------------------------
+    ids_config = [str(i) for i in PATIENT_IDS] if PATIENT_IDS else None
+    active_patient = get_active_patient()
+
+    if active_patient:
+        log.info(
+            f"COM auto-detection: patient actif → "
+            f"{active_patient['prenom']} {active_patient['nom']} "
+            f"(code {active_patient['code']})"
+        )
+        ids_config  = [active_patient["code"]]
+        auto_detect = True
+    else:
+        if _WIN32_AVAILABLE:
+            log.info("COM auto-detection: aucun patient ouvert dans Access — menu interactif.")
+        auto_detect = False
+    # -------------------------------------------------------------------------
+
+    # Chargement depuis MDB
     df_pat, df_con, df_ref = load_all_tables(patient_ids=ids_config)
 
-    print(f"▶ Construction de l'historique…")
+    log.info("▶ Construction de l'historique…")
     df = build_history(df_pat, df_con, df_ref, typeref=TYPEREF)
 
     # Biométrie filtrée sur les mêmes patients
-    print("▶ Chargement de la biométrie…")
+    log.info("▶ Chargement de la biométrie…")
     df_al = load_biometrie(patient_ids=ids_config)
 
     # Sélection
-    if PATIENT_IDS:
+    if auto_detect:
+        # Patient résolu automatiquement via COM — on garde ids_config tel quel
         ids = ids_config
-        print(f"▶ Patient(s) configuré(s) : {', '.join(ids)}")
+        log.info(f"▶ Patient détecté automatiquement : {', '.join(ids)}")
+    elif PATIENT_IDS and not auto_detect:
+        ids = ids_config
+        log.info(f"▶ Patient(s) configuré(s) : {', '.join(ids)}")
     else:
         ids = choisir_patients(df)
         # Si sélection interactive → recharger la bio pour ces patients seulement
@@ -642,14 +810,14 @@ def main():
     # Visualisation
     print()
     if MODE_COHORTE:
-        print(f"▶ Courbe cohorte ({len(ids)} patients, œil {OEIL_COHORTE})…")
+        log.info(f"▶ Courbe cohorte ({len(ids)} patients, œil {OEIL_COHORTE})…")
         plot_cohort(df, patient_ids=ids, eye=OEIL_COHORTE, save=SAUVEGARDER)
     else:
-        print(f"▶ Tracé individuel de {len(ids)} patient(s)…")
+        log.info(f"▶ Tracé individuel de {len(ids)} patient(s)…")
         for pid in ids:
             plot_patient(df, pid, df_al=df_al, save=SAUVEGARDER)
 
-    print("✓ Terminé.")
+    log.info("✓ Terminé.")
 
 
 if __name__ == "__main__":
