@@ -494,7 +494,69 @@ def _axe_x(ax, date_min, date_max):
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=35, ha="right", fontsize=9)
 
 
+
+# Mean annual myopia progression rates (D/yr) stratified by age group.
+# Source: Donovan L. et al., Optom Vis Sci 2012;89:301-308 (meta-analysis, 34 studies).
+# Each entry is a tuple of (age_lower_bound, age_upper_bound, progression_rate).
+_DONOVAN_RATES = [
+    ( 6,  8, -0.95),
+    ( 9, 10, -0.70),
+    (11, 12, -0.60),
+    (13, 14, -0.45),
+    (15, 16, -0.28),
+    (17, 18, -0.15),
+    (19, 25, -0.06),
+]
+
+
+def _build_reference_curve(
+    date_start: "pd.Timestamp",
+    age_start: float,
+    se_start: float,
+    date_end: "pd.Timestamp",
+) -> tuple[list, list]:
+    """
+    Generate the Donovan 2012 normative progression curve for a given patient.
+
+    Starting from the patient's first recorded visit (date_start, age_start,
+    se_start), the curve is extrapolated in 3-month steps using the
+    age-stratified annual rates from _DONOVAN_RATES, up to date_end or age 25,
+    whichever comes first.
+
+    Returns a pair (dates, SE_values) suitable for direct use with Matplotlib.
+    """
+    from datetime import timedelta
+
+    dates  = [date_start]
+    values = [se_start]
+
+    current_date = date_start
+    current_age  = age_start
+    current_se   = se_start
+
+    while current_date < date_end and current_age < 25:
+        # Look up the progression rate for the patient's current age bracket.
+        # Fall back to the oldest-age rate if no bracket matches.
+        rate = -0.06
+        for age_lo, age_hi, r in _DONOVAN_RATES:
+            if age_lo <= current_age <= age_hi:
+                rate = r
+                break
+
+        # Advance the simulation by one quarter (0.25 years).
+        step_years = 0.25
+        current_se   += rate * step_years
+        current_age  += step_years
+        current_date += timedelta(days=round(365.25 * step_years))
+
+        dates.append(current_date)
+        values.append(current_se)
+
+    return dates, values
+
+
 def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
+
     pat = df[df["CodePatient"] == str(code_patient)].dropna(subset=["Date"]).copy()
     pat = pat[pat[["SE_D", "SE_G"]].notna().any(axis=1)].sort_values("Date")
 
@@ -521,8 +583,8 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
     ax.set_axisbelow(True)
 
     all_se = pd.concat([pat["SE_D"].dropna(), pat["SE_G"].dropna()])
-    ymin = min(-0.5, all_se.min()) - 0.5
-    ymax = max(0.5,  all_se.max()) + 0.5
+    ymin = all_se.min() - 0.5
+    ymax = all_se.max() + 0.5
     _add_severity_zones(ax, ymin, ymax)
 
     # Courbes SE
@@ -531,6 +593,18 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
         sub = pat.dropna(subset=[col])
         if sub.empty: continue
         ax.plot(sub["Date"], sub[col], zorder=3, **STYLE[eye])
+
+        # Label each intermediate point
+        for _, row in sub.iloc[:-1].iterrows():
+            ax.annotate(
+                f"{row[col]:+.2f}",
+                xy=(row["Date"], row[col]),
+                xytext=(0, 9 if eye == "D" else -13),
+                textcoords="offset points", fontsize=7,
+                color=STYLE[eye]["color"], ha="center", zorder=4,
+            )
+
+        # Last point with box and severity label
         last = sub.iloc[-1]
         ax.annotate(
             f"{last[col]:+.2f} D\n{_severity_label(last[col])}",
@@ -547,14 +621,32 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
         for _, _, c, lbl in SEVERITY_ZONES
     ]
 
-    # Courbes AL
+    # Reference curve — Donovan et al. 2012
+    ref_patch = None
+    if "Age" in pat.columns and "DateNaissance" in pat.columns:
+        first = pat.dropna(subset=["SE_D"]).iloc[0] if not pat.dropna(subset=["SE_D"]).empty else None
+        if first is not None and pd.notna(first["Age"]) and pd.notna(first["SE_D"]):
+            ref_dates, ref_vals = _build_reference_curve(
+                date_start=first["Date"],
+                age_start=float(first["Age"]),
+                se_start=float(first["SE_D"]),
+                date_end=pat["Date"].max(),
+            )
+            ax.plot(ref_dates, ref_vals,
+                    color="#34d399", linewidth=1.5, linestyle="--",
+                    alpha=0.75, zorder=2, label="Patient type (Donovan 2012)")
+            ref_patch = plt.Line2D([], [], color="#34d399", linewidth=1.5,
+                                   linestyle="--", alpha=0.75,
+                                   label="Patient type (Donovan 2012)")
+
+    # AL curves — markers only, no connecting line
     if has_al:
         ax2.plot(al_pat["DateMesure"], al_pat["AL_OD"],
-                 marker="^", color="#a78bfa", linewidth=1.8,
-                 markersize=7, linestyle="--", label="Longueur axiale OD (mm)")
+                 marker="^", color="#a78bfa", linewidth=0,
+                 markersize=8, linestyle="none", label="Longueur axiale OD (mm)")
         ax2.plot(al_pat["DateMesure"], al_pat["AL_OG"],
-                 marker="v", color="#f472b6", linewidth=1.8,
-                 markersize=7, linestyle="--", label="Longueur axiale OG (mm)")
+                 marker="v", color="#f472b6", linewidth=0,
+                 markersize=8, linestyle="none", label="Longueur axiale OG (mm)")
         ax2.set_ylabel("Longueur axiale (mm)", color="#94a3b8", fontsize=10)
         ax2.tick_params(colors="#64748b", labelsize=9)
         ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f} mm"))
@@ -580,15 +672,17 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
 
     # Légende
     handles, labels_leg = ax.get_legend_handles_labels()
+    extra = zone_patches + ([ref_patch] if ref_patch else [])
+    extra_labels = [p.get_label() for p in extra]
     if has_al:
         h2, l2 = ax2.get_legend_handles_labels()
-        ax.legend(handles + zone_patches + h2,
-                  labels_leg + [p.get_label() for p in zone_patches] + l2,
+        ax.legend(handles + extra + h2,
+                  labels_leg + extra_labels + l2,
                   loc="lower left", fontsize=8, framealpha=0.25,
                   facecolor="#0f172a", edgecolor="#1e293b", labelcolor="#94a3b8")
     else:
-        ax.legend(handles + zone_patches,
-                  labels_leg + [p.get_label() for p in zone_patches],
+        ax.legend(handles + extra,
+                  labels_leg + extra_labels,
                   loc="lower left", fontsize=8, framealpha=0.25,
                   facecolor="#0f172a", edgecolor="#1e293b", labelcolor="#94a3b8")
 
