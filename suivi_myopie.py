@@ -162,8 +162,40 @@ def build_history(
     full["DateNaissance"] = full["DateNaissance"].apply(_parse_dob)
     full["Age"] = ((full["Date"] - full["DateNaissance"]).dt.days / 365.25).round(1)
 
+    # Keep only visits where the patient was under 25 years old at the time of consultation
+    full = full[full["Age"] < 25.0]
+
+    # Count the number of distinct visit dates per patient
+    measurements_per_patient = full.groupby("CodePatient")["Date"].nunique()
+
+    # Retain only patients who have at least 2 distinct measurement dates
+    valid_patients = measurements_per_patient[measurements_per_patient >= 2].index
+
+    # Filter the dataset to keep only those valid patients
+    full = full[full["CodePatient"].isin(valid_patients)]
+
     full = full.sort_values(["CodePatient", "Date"]).reset_index(drop=True)
+<<<<<<< HEAD
     print(f"  Historique : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
+=======
+
+    # Print the list of retained patients
+    print("\n  PATIENTS UNDER 25 WITH AT LEAST 2 MEASUREMENTS\n")
+    for pid in valid_patients:
+        
+        # Retrieve the first row for this patient to get name info
+        pat_info = full[full["CodePatient"] == str(pid)].iloc[0]
+        
+        # Get the number of distinct measurement dates for this patient
+        nb_measurements = measurements_per_patient[pid]
+        
+        # Display patient ID, name and measurement count
+        print(f"  ID: {pid:<10} | {pat_info['Prenom']:<10} {pat_info['NOM']:<15} | {nb_measurements} measurements")
+    print()
+
+
+    print(f"  Historique construit : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
+>>>>>>> 2b85acc (docs: add inline comments and remove separators in build_history)
     return full
 
 
