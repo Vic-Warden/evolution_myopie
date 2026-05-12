@@ -176,8 +176,30 @@ def build_history(
 
     full = full.sort_values(["CodePatient", "Date"]).reset_index(drop=True)
 
+    # Build a NumConsult → CodePatient lookup from the consultation table
+    consult_for_glasses = df_consult[["N° consultation", "Code patient"]].copy()
+    consult_for_glasses.columns = ["NumConsult", "CodePatient"]
+    consult_for_glasses["NumConsult"]  = consult_for_glasses["NumConsult"].astype(str)
+    consult_for_glasses["CodePatient"] = consult_for_glasses["CodePatient"].astype(str)
+
+    # Join the full unfiltered refraction table with the lookup above
+    ref_full = df_refrac.copy()
+    ref_full["NumConsult"] = ref_full["NumConsult"].astype(str)
+    ref_full = ref_full.merge(consult_for_glasses, on="NumConsult", how="inner")
+
+    # Compute the spherical equivalent for the right eye
+    ref_full["SphD"] = parse_fr_float(ref_full["SphD"])
+    ref_full["CylD"] = parse_fr_float(ref_full["CylD"])
+    ref_full["SE_D_raw"] = calc_se(ref_full["SphD"], ref_full["CylD"])
+
+    # Flag patients with at least one subjective refraction (TypeRef=7) and SE_D ≤ -0.5 D
+    glasses_mask = (ref_full["TypeRef"].astype(str) == "7") & (ref_full["SE_D_raw"] <= -0.5)
+    glasses_patients = set(ref_full[glasses_mask]["CodePatient"].astype(str).unique())
+
     # Print the list of retained patients
-    print("\n  PATIENTS UNDER 25 WITH AT LEAST 2 MEASUREMENTS\n")
+    print("\n" + "═" * 70)
+    print("  PATIENTS UNDER 25 WITH AT LEAST 2 MEASUREMENTS")
+    print("═" * 70)
     for pid in valid_patients:
 
         # Retrieve the first row for this patient to get name info
@@ -186,9 +208,11 @@ def build_history(
         # Get the number of distinct measurement dates for this patient
         nb_measurements = measurements_per_patient[pid]
 
-        # Display patient ID, name and measurement count
-        print(f"  ID: {pid:<10} | {pat_info['Prenom']:<10} {pat_info['NOM']:<15} | {nb_measurements} measurements")
-    print()
+        # Check whether this patient is inferred as a glasses wearer
+        wears_glasses = "Yes" if str(pid) in glasses_patients else "Unknown/No"
+
+        print(f"  ID: {pid:<10} | {pat_info['Prenom']:<10} {pat_info['NOM']:<15} | {nb_measurements} measurements | Glasses: {wears_glasses}")
+    print("═" * 70 + "\n")
 
     print(f"  Historique : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
     return full
