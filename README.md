@@ -6,18 +6,14 @@ Ensemble de scripts Python pour l'extraction, l'analyse et la visualisation de d
 
 ```
 evolution_myopie/
-├── config.py               ← ⚙️  Configuration centralisée (chemins & paramètres)
-├── extraire_biometrie.py   ← Étape 1 : extraction PDF → CSV/JSON
-├── suivi_al.py             ← Étape 2 : graphe longueur axiale
-├── suivi_myopie.py         ← Étape 3 : graphe réfraction longitudinale
+├── suivi_myopie.py         ← Single entry point: extraction, analysis and visualisation
 ├── requirements.txt
-├── data/
-│   ├── pdf/                ← 📄 Placez ici les PDFs biométrie (MMT-Full_*.pdf)
-│   └── json/               ← 📄 Placez ici Patients.json, Consultation.json, tREFRACTION.json
-└── output/
-    ├── csv/                ← 📊 biometrie_extraite.csv / .json (généré automatiquement)
-    └── graphs/             ← 🖼️  PNGs générés (si SAUVEGARDER=True dans config.py)
+└── README.md
 ```
+
+> **Note:** `config.py`, `extraire_biometrie.py`, `suivi_al.py` and `find_patient/patient.py` have been
+> consolidated into `suivi_myopie.py`. All configuration (paths, patient IDs, flags) is now set via
+> constants at the top of that file.
 
 ## Vue d'ensemble
 
@@ -31,60 +27,47 @@ Ce projet traite trois étapes clés du suivi ophtalmologique :
 
 ## Scripts
 
-### 1. `extraire_biometrie.py`
-**Extraction de données biométriques depuis PDFs**
+### `suivi_myopie.py`
+**Single consolidated script — all-in-one pipeline**
 
-Parcourt `data/pdf/` et extrait :
-- Nom du patient, date de naissance, date de mesure
-- Longueur axiale composite OD et OG en mm
+Connects directly to the Access database (`PUBLIC.MDB`) and the biometry PDF folder, then:
+- Reads refractions from `tREFRACTION`, joined with `Consultation` and `Patients`
+- Extracts axial length (AL) from `MMT-Full_*.pdf` files via the `Documents` table
+- Plots individual longitudinal SE + AL curves with COMET normative reference curves
+- Plots a cohort comparison chart (optional, set `MODE_COHORTE = True`)
+- Auto-detects the active patient from the open Access form via COM (Windows only)
+- Saves charts to PNG if `SAUVEGARDER = True`
 
-**Sortie :** `output/csv/biometrie_extraite.csv`
+**Key configuration constants (top of file):**
+| Constant | Description |
+|---|---|
+| `FICHIER_MDB` | Path to `PUBLIC.MDB` |
+| `DOSSIER_PDF` | Folder containing the biometry PDFs |
+| `PATIENT_IDS` | Force specific patient IDs (or `None` for interactive menu) |
+| `TYPEREF` | Refraction type filter (`7` = subjective, `6` = auto, `None` = all) |
+| `MODE_COHORTE` | `True` = cohort chart, `False` = individual charts |
+| `SAUVEGARDER` | `True` = save PNG, `False` = display |
 
-**Dépendances :** `pdfplumber`, `pandas`
-
----
-
-### 2. `suivi_al.py`
-**Visualisation de l'axial length longitudinale**
-
-Trace le suivi temporel de la longueur axiale (AL) pour chaque patient.
-
-**Source :** `output/csv/biometrie_extraite.json`
-
-**Dépendances :** `pandas`, `matplotlib`
-3. Graphe interactif montrant l'évolution d'AL en fonction de la date
-
-**Dépendances :** `pandas`, `matplotlib`
-
----
-
-### 3. `suivi_myopie.py`
-**Suivi longitudinal de l'équivalent sphérique (réfraction)**
-
-Visualise l'évolution de la réfraction à partir des JSONs dans `data/json/`.
-
-**Sources :** `data/json/Patients.json`, `Consultation.json`, `tREFRACTION.json`
-
-**Dépendances :** `pandas`, `matplotlib`
+**Dependencies:** `pandas`, `matplotlib`, `pyodbc`, `pdfplumber`, `pywin32` (optional, COM only)
 
 ---
 
 ## Flux de données
 
 ```
-PDFs biométrie
-       ↓
- extraire_biometrie.py
-       ↓
-biometrie_extraite.csv/json
-       ↓ (optionnel)
-suivi_al.py → Graphe AL longitudinale
-       
-Base ophtalmologique (Patients/Consultation/tREFRACTION)
-       ↓
- suivi_myopie.py
-       ↓
-Graphe réfraction longitudinale
+PUBLIC.MDB (Access)
+  ├── tREFRACTION + Consultation + Patients
+  │          ↓
+  │    Spherical equivalent (SE) curves per patient
+  │
+  └── Documents → MMT-Full_*.pdf paths
+             ↓
+       pdfplumber → Axial length (AL) per eye
+             ↓
+    suivi_myopie.py
+             ↓
+    Individual chart (SE + AL + COMET reference)
+    or Cohort comparison chart
 ```
 
 ---
@@ -102,56 +85,37 @@ pip install -r requirements.txt
 ### Setup
 1. Cloner le dépôt
 2. Installer les dépendances (voir ci-dessus)
-3. Placer les PDFs dans `data/pdf/` et les JSONs dans `data/json/`
-4. Ajuster les paramètres dans **`config.py`** si nécessaire
-5. Exécuter les scripts dans l'ordre
+3. Install the [Microsoft Access Database Engine 2016 (64-bit)](https://www.microsoft.com/en-us/download/details.aspx?id=54920) (Windows only)
+4. Set `FICHIER_MDB` and `DOSSIER_PDF` at the top of `suivi_myopie.py`
+5. Run the script
 
 ---
 
 ## Utilisation
 
-### Étape 1 : Extraire les données biométriques
-```bash
-python extraire_biometrie.py
-```
-Produit : `biometrie_extraite.csv` (ou `.json` si convertis)
-
-### Étape 2 : Visualiser l'AL longitudinale
-```bash
-python suivi_al.py
-```
-Menu interactif → sélectionnez un patient → graphe
-
-### Étape 3 : Visualiser la réfraction longitudinale
 ```bash
 python suivi_myopie.py
 ```
-Affiche les données réfractives par patient ou en cohorte
+
+- **Interactive menu:** leave `PATIENT_IDS = None` → search by name or ID
+- **Force a patient:** set `PATIENT_IDS = [1758507609]`
+- **COM auto-detection (Windows):** if Access is open with a patient record, the chart is generated automatically without any prompt
+- **Cohort mode:** set `MODE_COHORTE = True`
+- **Save PNG:** set `SAUVEGARDER = True` → files written next to the script
 
 ---
 
 ## Formats de données
 
-### `biometrie_extraite.csv`
-```
-fichier,NOM,DateNaissance,DateMesure,AL_OD,AL_OG
-MMT-Full_20260416_004404_1533.pdf,DUPONT Jean,01/01/1990,2026-04-16,23.45,23.52
-```
+The script reads directly from the Access database — no intermediate CSV/JSON files are needed.
 
-### `Patients.json`
-```json
-[{"PatientID": 1, "Nom": "DUPONT", "Prenom": "Jean", "DateNaissance": "01/01/1990"}]
-```
-
-### `Consultation.json`
-```json
-[{"ConsultID": 1, "PatientID": 1, "DateConsult": "2026-04-16"}]
-```
-
-### `tREFRACTION.json`
-```json
-[{"RefID": 1, "ConsultID": 1, "Oeil": "D", "Sphere": "-3.50", "Cylindre": "-0.75", "TypeRef": 6}]
-```
+### Tables Access utilisées
+| Table | Colonnes clés |
+|---|---|
+| `Patients` | `Code patient`, `NOM`, `Prénom`, `Date de Naissance` |
+| `Consultation` | `N° consultation`, `Code patient`, `Date` |
+| `tREFRACTION` | `NumConsult`, `SphD`, `CylD`, `SphG`, `CylG`, `TypeRef` |
+| `Documents` | `code patient`, `Photo externe` (PDF path) |
 
 ---
 
@@ -172,6 +136,9 @@ MMT-Full_20260416_004404_1533.pdf,DUPONT Jean,01/01/1990,2026-04-16,23.45,23.52
 | Erreur JSON encoding | Vérifier que les fichiers JSON sont en UTF-8 |
 | Graphe vide | Vérifier les dates et que `DateMesure` n'est pas null |
 | Dates mal parsées | Adapter `_parse_dob()` au format de vos données |
+| Cannot connect to MDB | Install Access Database Engine 2016 (64-bit) and check `FICHIER_MDB` path |
+| NAS/network path unreachable | Script retries for 120 s — check network mount |
+| COM auto-detection not working | Install `pywin32`; Access must be open with a patient record displayed |
 
 ---
 
