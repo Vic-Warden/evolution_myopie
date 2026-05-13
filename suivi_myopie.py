@@ -1035,19 +1035,6 @@ def choisir_patients(df: pd.DataFrame) -> list[str]:
         .set_index("CodePatient")
     )
 
-    print()
-    print("┌─────────────────────────────────────────────────┐")
-    print("│           SÉLECTION DU PATIENT                  │")
-    print("├─────────────────────────────────────────────────┤")
-    print(f"│  {total} patient(s) disponible(s) dans la base      │")
-    print("│                                                 │")
-    print("│  Entrez un nom/prénom    →  ex: dupont          │")
-    print("│  Entrez un ID patient    →  ex: 1758510666      │")
-    print("│  Plusieurs IDs (virgule) →  ex: 101, 102        │")
-    print("│  Appuyez Entrée seul     →  tous les patients   │")
-    print("└─────────────────────────────────────────────────┘")
-    print()
-
     while True:
         saisie = input("  Votre choix : ").strip()
 
