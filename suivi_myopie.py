@@ -495,9 +495,10 @@ def _axe_x(ax, date_min, date_max):
 
 
 
-# Age-stratified annual progression rates (SE in D/yr, AL in mm/yr) from COMET.
-# SE source: Jones-Jordan et al., Invest Ophthalmol Vis Sci 2010;51:3875-3884.
-# AL source: Jones-Jordan et al., Invest Ophthalmol Vis Sci 2018 (PMC6013843).
+# Age-stratified annual progression rates (SE in D/yr, AL in mm/yr) from the
+# Correction of Myopia Evaluation Trial (COMET).
+# SE: Jones-Jordan et al., Invest Ophthalmol Vis Sci 2010;51:3875-3884.
+# AL: Jones-Jordan et al., Invest Ophthalmol Vis Sci 2018 (PMC6013843).
 # Each tuple: (age_lower, age_upper, se_rate_D_per_yr, al_rate_mm_per_yr).
 _COMET_RATES = [
     ( 6,  7, -0.75, 0.38),
@@ -509,7 +510,7 @@ _COMET_RATES = [
     (19, 25, -0.05, 0.01),
 ]
 
-# Residual drift applied when age falls outside all defined brackets (post-stabilisation).
+# Default rates applied beyond age 25 (post-stabilisation residual drift).
 _COMET_SE_DEFAULT  = -0.05
 _COMET_AL_DEFAULT  =  0.01
 
@@ -519,7 +520,6 @@ def _comet_rates_at_age(age: float) -> tuple[float, float]:
     for age_lo, age_hi, se_r, al_r in _COMET_RATES:
         if age_lo <= age <= age_hi:
             return se_r, al_r
-    # Age is outside all defined brackets; fall back to post-stabilisation defaults.
     return _COMET_SE_DEFAULT, _COMET_AL_DEFAULT
 
 
@@ -659,10 +659,10 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
             )
             ax.plot(ref_dates, ref_vals,
                     color="#34d399", linewidth=1.5, linestyle="--",
-                    alpha=0.75, zorder=2, label="Patient type SE (COMET)")
+                    alpha=0.75, zorder=2, label="Patient type équivalent sphérique (COMET)")
             ref_patch = plt.Line2D([], [], color="#34d399", linewidth=1.5,
                                    linestyle="--", alpha=0.75,
-                                   label="Patient type SE (COMET)")
+                                   label="Patient type équivalent sphérique (COMET)")
 
     # AL curves — connecting lines + value label on every point + COMET reference
     al_ref_patch = None
@@ -690,23 +690,29 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
                 )
 
         # AL reference curve — COMET (Jones-Jordan et al. 2018)
-        if "Age" in al_pat.columns:
-            al_first = al_pat.dropna(subset=["AL_OD", "Age"]).sort_values("DateMesure")
-            if not al_first.empty:
-                row0 = al_first.iloc[0]
+        # Age is read from the SE dataframe (pat) matched on the closest date,
+        # so no Age column is required in df_al.
+        al_first = al_pat.dropna(subset=["AL_OD"]).sort_values("DateMesure")
+        if not al_first.empty and "Age" in pat.columns:
+            first_al_date = al_first.iloc[0]["DateMesure"]
+            # Find the SE visit closest to the first AL measurement to get age.
+            pat_with_age = pat.dropna(subset=["Age"])
+            if not pat_with_age.empty:
+                closest_idx = (pat_with_age["Date"] - first_al_date).abs().idxmin()
+                age_at_first_al = float(pat_with_age.loc[closest_idx, "Age"])
                 al_ref_dates, al_ref_vals = _build_al_reference_curve(
-                    date_start=row0["DateMesure"],
-                    age_start=float(row0["Age"]),
-                    al_start=float(row0["AL_OD"]),
+                    date_start=first_al_date,
+                    age_start=age_at_first_al,
+                    al_start=float(al_first.iloc[0]["AL_OD"]),
                     date_end=al_pat["DateMesure"].max(),
                 )
                 ax2.plot(al_ref_dates, al_ref_vals,
                          color="#86efac", linewidth=1.5, linestyle=":",
                          alpha=0.75, zorder=2,
-                         label="Patient type AL (COMET)")
+                         label="Patient type longueur axiale (COMET)")
                 al_ref_patch = plt.Line2D([], [], color="#86efac", linewidth=1.5,
                                           linestyle=":", alpha=0.75,
-                                          label="Patient type AL (COMET)")
+                                          label="Patient type longueur axiale (COMET)")
 
         ax2.set_ylabel("Longueur axiale (mm)", color="#94a3b8", fontsize=10)
         ax2.tick_params(colors="#64748b", labelsize=9)
