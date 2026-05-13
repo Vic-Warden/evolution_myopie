@@ -615,6 +615,208 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
     for eye in ("D", "G"):
         col = f"SE_{eye}"
         sub = pat.dropna(subset=[col])
+        if sub.empty:
+            continue
+        ax.plot(sub["Date"], sub[col], zorder=3, **STYLE[eye])
+
+        # Label each intermediate point
+        for _, row in sub.iloc[:-1].iterrows():
+            ax.annotate(
+                f"{row[col]:+.2f}",
+                xy=(row["Date"], row[col]),
+                xytext=(0, 9 if eye == "D" else -13),
+                textcoords="offset points", fontsize=7,
+                color=STYLE[eye]["color"], ha="center", zorder=4,
+            )
+
+        # Last point: OD label above, OG label below to avoid overlap
+        last = sub.iloc[-1]
+        y_offset = 22 if eye == "D" else -38
+        ax.annotate(
+            f"{last[col]:+.2f} D\n{_severity_label(last[col])}",
+            xy=(last["Date"], last[col]),
+            xytext=(10, y_offset),
+            textcoords="offset points", fontsize=8,
+            color=STYLE[eye]["color"],
+            bbox=dict(boxstyle="round,pad=0.3", fc="#0f172a", ec=STYLE[eye]["color"], alpha=0.85),
+            arrowprops=dict(arrowstyle="-", color=STYLE[eye]["color"], alpha=0.5),
+        )
+
+    # SE reference curve — COMET (Jones-Jordan et al. 2010 / 2018)
+    ref_patch = None
+    if "Age" in pat.columns and "DateNaissance" in pat.columns:
+        first = pat.dropna(subset=["SE_D"]).iloc[0] if not pat.dropna(subset=["SE_D"]).empty else None
+        if first is not None and pd.notna(first["Age"]) and pd.notna(first["SE_D"]):
+            ref_dates, ref_vals = _build_se_reference_curve(
+                date_start=first["Date"],
+                age_start=float(first["Age"]),
+                se_start=float(first["SE_D"]),
+                date_end=pat["Date"].max(),
+            )
+            ax.plot(ref_dates, ref_vals,
+                    color="#34d399", linewidth=1.5, linestyle="--",
+                    alpha=0.75, zorder=2)
+            ref_patch = plt.Line2D([], [], color="#34d399", linewidth=1.5,
+                                   linestyle="--", alpha=0.75,
+                                   label="Patient type équivalent sphérique (COMET)")
+
+    # AL curves — connecting lines + value label on every point + COMET reference
+    al_ref_patch = None
+    if has_al:
+        for al_col, marker, color, label in [
+            ("AL_OD", "^", "#a78bfa", "Longueur axiale OD (mm)"),
+            ("AL_OG", "v", "#f472b6", "Longueur axiale OG (mm)"),
+        ]:
+            al_sub = al_pat.dropna(subset=[al_col])
+            if al_sub.empty:
+                continue
+            ax2.plot(al_sub["DateMesure"], al_sub[al_col],
+                     marker=marker, color=color, linewidth=1.6,
+                     markersize=7, linestyle="--", label=label)
+
+            # Value label on every AL point
+            for _, row in al_sub.iterrows():
+                y_off = 9 if al_col == "AL_OD" else -13
+                ax2.annotate(
+                    f"{row[al_col]:.2f}",
+                    xy=(row["DateMesure"], row[al_col]),
+                    xytext=(0, y_off),
+                    textcoords="offset points", fontsize=7,
+                    color=color, ha="center", zorder=4,
+                )
+
+        # AL reference curve — COMET (Jones-Jordan et al. 2018)
+        al_first = al_pat.dropna(subset=["AL_OD"]).sort_values("DateMesure")
+        if not al_first.empty and "Age" in pat.columns:
+            first_al_date = al_first.iloc[0]["DateMesure"]
+            pat_with_age = pat.dropna(subset=["Age"])
+            if not pat_with_age.empty:
+                closest_idx = (pat_with_age["Date"] - first_al_date).abs().idxmin()
+                age_at_first_al = float(pat_with_age.loc[closest_idx, "Age"])
+                al_ref_dates, al_ref_vals = _build_al_reference_curve(
+                    date_start=first_al_date,
+                    age_start=age_at_first_al,
+                    al_start=float(al_first.iloc[0]["AL_OD"]),
+                    date_end=al_pat["DateMesure"].max(),
+                )
+                ax2.plot(al_ref_dates, al_ref_vals,
+                         color="#86efac", linewidth=1.5, linestyle=":",
+                         alpha=0.75, zorder=2)
+                al_ref_patch = plt.Line2D([], [], color="#86efac", linewidth=1.5,
+                                          linestyle=":", alpha=0.75,
+                                          label="Patient type longueur axiale (COMET)")
+
+        ax2.set_ylabel("Longueur axiale (mm)", color="#94a3b8", fontsize=10)
+        ax2.tick_params(colors="#64748b", labelsize=9)
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f} mm"))
+        for spine in ax2.spines.values():
+            spine.set_edgecolor("#1e293b")
+
+    # Axes
+    _axe_x(ax, pat["Date"].min(), pat["Date"].max())
+    ax.set_ylim(ymin, ymax)
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:+.1f} D"))
+    ax.tick_params(colors="#64748b", labelsize=9)
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#1e293b")
+
+    ax.set_xlabel("Date de consultation", color="#94a3b8", fontsize=10, labelpad=8)
+    ax.set_ylabel("Équivalent sphérique (dioptries)", color="#94a3b8", fontsize=10, labelpad=8)
+
+    title = f"Évolution de la myopie — {prenom} {nom}".strip()
+    if "Age" in pat.columns:
+        ages = pat["Age"].dropna()
+        ages = ages[ages > 0]
+        if not ages.empty:
+            title += f"  ({ages.min():.0f}→{ages.max():.0f} ans)"
+    ax.set_title(title, color="#e2e8f0", fontsize=13, fontweight="bold", pad=14)
+
+    # Légende — ordre fixe
+    se_handles = [
+        plt.Line2D([], [], **{k: v for k, v in STYLE["D"].items() if k != "label"},
+                   label="Œil droit (SE_D)"),
+        plt.Line2D([], [], **{k: v for k, v in STYLE["G"].items() if k != "label"},
+                   label="Œil gauche (SE_G)"),
+    ]
+    zone_handles = [
+        mpatches.Patch(color=c, alpha=0.35, label=lbl)
+        for _, _, c, lbl in SEVERITY_ZONES
+    ]
+    al_handles = []
+    if has_al:
+        for al_col, marker, color, label in [
+            ("AL_OD", "^", "#a78bfa", "Longueur axiale OD (mm)"),
+            ("AL_OG", "v", "#f472b6", "Longueur axiale OG (mm)"),
+        ]:
+            if not al_pat.dropna(subset=[al_col]).empty:
+                al_handles.append(plt.Line2D([], [], color=color, marker=marker,
+                                             linewidth=1.6, markersize=7,
+                                             linestyle="--", label=label))
+    ref_handles = []
+    if ref_patch:
+        ref_handles.append(ref_patch)
+    if al_ref_patch:
+        ref_handles.append(al_ref_patch)
+
+    all_handles = se_handles + zone_handles + al_handles + ref_handles
+    ax.legend(all_handles, [h.get_label() for h in all_handles],
+              loc="lower left", fontsize=8, framealpha=0.25,
+              facecolor="#0f172a", edgecolor="#1e293b", labelcolor="#94a3b8")
+
+    # Stats
+    seD    = pat["SE_D"].dropna()
+    prog_D = (seD.iloc[-1] - seD.iloc[0]) if len(seD) > 1 else float("nan")
+    duree  = (pat["Date"].max() - pat["Date"].min()).days / 365.25
+    ax.text(0.99, 0.97,
+            f"n={n_pts} mesures  |  durée {duree:.1f} ans\n"
+            f"OD : {seD.min():+.2f} D → {seD.max():+.2f} D  (Δ {prog_D:+.2f} D)",
+            transform=ax.transAxes, ha="right", va="top",
+            fontsize=8, color="#64748b", fontfamily="monospace",
+            bbox=dict(boxstyle="round,pad=0.4", fc="#0f172a", ec="#1e293b", alpha=0.7))
+
+    plt.tight_layout()
+    if save:
+        outpath = Path(output_dir) / f"myopie_patient_{code_patient}.png"
+        fig.savefig(outpath, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+        log.info(f"  Sauvegardé : {outpath}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+    pat = df[df["CodePatient"] == str(code_patient)].dropna(subset=["Date"]).copy()
+    pat = pat[pat[["SE_D", "SE_G"]].notna().any(axis=1)].sort_values("Date")
+
+    if pat.empty:
+        log.warning(f"  Aucune donnée valide pour le patient {code_patient}")
+        return
+
+    nom    = pat["NOM"].iloc[0]    if "NOM"    in pat.columns else "?"
+    prenom = pat["Prenom"].iloc[0] if "Prenom" in pat.columns else ""
+    n_pts  = len(pat)
+
+    # Biométrie
+    al_pat = pd.DataFrame()
+    if df_al is not None and not df_al.empty:
+        al_pat = df_al[df_al["CodePatient"] == str(code_patient)].dropna(subset=["DateMesure"])
+    has_al = not al_pat.empty
+
+    # Figure
+    fig, ax = plt.subplots(figsize=(13, 6))
+    ax2 = ax.twinx() if has_al else None
+    fig.patch.set_facecolor("#0f172a")
+    ax.set_facecolor("#111827")
+    ax.grid(True, color="#1e293b", linewidth=0.8, zorder=0)
+    ax.set_axisbelow(True)
+
+    all_se = pd.concat([pat["SE_D"].dropna(), pat["SE_G"].dropna()])
+    ymin = all_se.min() - 0.5
+    ymax = all_se.max() + 0.5
+    _add_severity_zones(ax, ymin, ymax)
+
+    # Courbes SE
+    for eye in ("D", "G"):
+        col = f"SE_{eye}"
+        sub = pat.dropna(subset=[col])
         if sub.empty: continue
         ax.plot(sub["Date"], sub[col], zorder=3, **STYLE[eye])
 
