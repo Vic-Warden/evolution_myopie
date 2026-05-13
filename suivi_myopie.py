@@ -495,62 +495,86 @@ def _axe_x(ax, date_min, date_max):
 
 
 
-# Mean annual myopia progression rates (D/yr) stratified by age group.
-# Source: Donovan L. et al., Optom Vis Sci 2012;89:301-308 (meta-analysis, 34 studies).
-# Each entry is a tuple of (age_lower_bound, age_upper_bound, progression_rate).
-_DONOVAN_RATES = [
-    ( 6,  8, -0.95),
-    ( 9, 10, -0.70),
-    (11, 12, -0.60),
-    (13, 14, -0.45),
-    (15, 16, -0.28),
-    (17, 18, -0.15),
-    (19, 25, -0.06),
+# Age-stratified annual progression rates (SE in D/yr, AL in mm/yr) from COMET.
+# SE source: Jones-Jordan et al., Invest Ophthalmol Vis Sci 2010;51:3875-3884.
+# AL source: Jones-Jordan et al., Invest Ophthalmol Vis Sci 2018 (PMC6013843).
+# Each tuple: (age_lower, age_upper, se_rate_D_per_yr, al_rate_mm_per_yr).
+_COMET_RATES = [
+    ( 6,  7, -0.75, 0.38),
+    ( 8, 10, -0.55, 0.33),
+    (11, 12, -0.45, 0.22),
+    (13, 14, -0.30, 0.15),
+    (15, 16, -0.18, 0.08),
+    (17, 18, -0.10, 0.04),
+    (19, 25, -0.05, 0.01),
 ]
 
+# Residual drift applied when age falls outside all defined brackets (post-stabilisation).
+_COMET_SE_DEFAULT  = -0.05
+_COMET_AL_DEFAULT  =  0.01
 
-def _build_reference_curve(
+
+def _comet_rates_at_age(age: float) -> tuple[float, float]:
+    """Return (se_rate, al_rate) for the given age from _COMET_RATES."""
+    for age_lo, age_hi, se_r, al_r in _COMET_RATES:
+        if age_lo <= age <= age_hi:
+            return se_r, al_r
+    # Age is outside all defined brackets; fall back to post-stabilisation defaults.
+    return _COMET_SE_DEFAULT, _COMET_AL_DEFAULT
+
+
+def _build_se_reference_curve(
     date_start: "pd.Timestamp",
     age_start: float,
     se_start: float,
     date_end: "pd.Timestamp",
 ) -> tuple[list, list]:
     """
-    Generate the Donovan 2012 normative progression curve for a given patient.
-
-    Starting from the patient's first recorded visit (date_start, age_start,
-    se_start), the curve is extrapolated in 3-month steps using the
-    age-stratified annual rates from _DONOVAN_RATES, up to date_end or age 25,
-    whichever comes first.
-
-    Returns a pair (dates, SE_values) suitable for direct use with Matplotlib.
+    Build the COMET normative SE progression curve anchored on the patient's
+    first visit. Steps quarterly until date_end or age 25.
+    Returns (dates, SE_values) ready for Matplotlib.
     """
     from datetime import timedelta
 
-    dates  = [date_start]
-    values = [se_start]
-
-    current_date = date_start
-    current_age  = age_start
-    current_se   = se_start
+    dates, values = [date_start], [se_start]
+    current_date, current_age, current_val = date_start, age_start, se_start
 
     while current_date < date_end and current_age < 25:
-        # Look up the progression rate for the patient's current age bracket.
-        # Fall back to the oldest-age rate if no bracket matches.
-        rate = -0.06
-        for age_lo, age_hi, r in _DONOVAN_RATES:
-            if age_lo <= current_age <= age_hi:
-                rate = r
-                break
-
-        # Advance the simulation by one quarter (0.25 years).
-        step_years = 0.25
-        current_se   += rate * step_years
-        current_age  += step_years
-        current_date += timedelta(days=round(365.25 * step_years))
-
+        se_rate, _ = _comet_rates_at_age(current_age)
+        step = 0.25
+        current_val  += se_rate * step
+        current_age  += step
+        current_date += timedelta(days=round(365.25 * step))
         dates.append(current_date)
-        values.append(current_se)
+        values.append(current_val)
+
+    return dates, values
+
+
+def _build_al_reference_curve(
+    date_start: "pd.Timestamp",
+    age_start: float,
+    al_start: float,
+    date_end: "pd.Timestamp",
+) -> tuple[list, list]:
+    """
+    Build the COMET normative AL elongation curve anchored on the patient's
+    first AL measurement. Steps quarterly until date_end or age 25.
+    Returns (dates, AL_values) ready for Matplotlib.
+    """
+    from datetime import timedelta
+
+    dates, values = [date_start], [al_start]
+    current_date, current_age, current_val = date_start, age_start, al_start
+
+    while current_date < date_end and current_age < 25:
+        _, al_rate = _comet_rates_at_age(current_age)
+        step = 0.25
+        current_val  += al_rate * step
+        current_age  += step
+        current_date += timedelta(days=round(365.25 * step))
+        dates.append(current_date)
+        values.append(current_val)
 
     return dates, values
 
@@ -604,12 +628,13 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
                 color=STYLE[eye]["color"], ha="center", zorder=4,
             )
 
-        # Last point with box and severity label
+        # Last point: OD label above, OG label below to avoid overlap
         last = sub.iloc[-1]
+        y_offset = 22 if eye == "D" else -38
         ax.annotate(
             f"{last[col]:+.2f} D\n{_severity_label(last[col])}",
             xy=(last["Date"], last[col]),
-            xytext=(10, 8 if eye == "D" else -22),
+            xytext=(10, y_offset),
             textcoords="offset points", fontsize=8,
             color=STYLE[eye]["color"],
             bbox=dict(boxstyle="round,pad=0.3", fc="#0f172a", ec=STYLE[eye]["color"], alpha=0.85),
@@ -621,12 +646,12 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
         for _, _, c, lbl in SEVERITY_ZONES
     ]
 
-    # Reference curve — Donovan et al. 2012
+    # SE reference curve — COMET (Jones-Jordan et al. 2010 / 2018)
     ref_patch = None
     if "Age" in pat.columns and "DateNaissance" in pat.columns:
         first = pat.dropna(subset=["SE_D"]).iloc[0] if not pat.dropna(subset=["SE_D"]).empty else None
         if first is not None and pd.notna(first["Age"]) and pd.notna(first["SE_D"]):
-            ref_dates, ref_vals = _build_reference_curve(
+            ref_dates, ref_vals = _build_se_reference_curve(
                 date_start=first["Date"],
                 age_start=float(first["Age"]),
                 se_start=float(first["SE_D"]),
@@ -634,19 +659,55 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
             )
             ax.plot(ref_dates, ref_vals,
                     color="#34d399", linewidth=1.5, linestyle="--",
-                    alpha=0.75, zorder=2, label="Patient type (Donovan 2012)")
+                    alpha=0.75, zorder=2, label="Patient type SE (COMET)")
             ref_patch = plt.Line2D([], [], color="#34d399", linewidth=1.5,
                                    linestyle="--", alpha=0.75,
-                                   label="Patient type (Donovan 2012)")
+                                   label="Patient type SE (COMET)")
 
-    # AL curves — markers only, no connecting line
+    # AL curves — connecting lines + value label on every point + COMET reference
+    al_ref_patch = None
     if has_al:
-        ax2.plot(al_pat["DateMesure"], al_pat["AL_OD"],
-                 marker="^", color="#a78bfa", linewidth=0,
-                 markersize=8, linestyle="none", label="Longueur axiale OD (mm)")
-        ax2.plot(al_pat["DateMesure"], al_pat["AL_OG"],
-                 marker="v", color="#f472b6", linewidth=0,
-                 markersize=8, linestyle="none", label="Longueur axiale OG (mm)")
+        for al_col, marker, color, label in [
+            ("AL_OD", "^", "#a78bfa", "Longueur axiale OD (mm)"),
+            ("AL_OG", "v", "#f472b6", "Longueur axiale OG (mm)"),
+        ]:
+            al_sub = al_pat.dropna(subset=[al_col])
+            if al_sub.empty:
+                continue
+            ax2.plot(al_sub["DateMesure"], al_sub[al_col],
+                     marker=marker, color=color, linewidth=1.6,
+                     markersize=7, linestyle="--", label=label)
+
+            # Value label on every AL point
+            for _, row in al_sub.iterrows():
+                y_off = 9 if al_col == "AL_OD" else -13
+                ax2.annotate(
+                    f"{row[al_col]:.2f}",
+                    xy=(row["DateMesure"], row[al_col]),
+                    xytext=(0, y_off),
+                    textcoords="offset points", fontsize=7,
+                    color=color, ha="center", zorder=4,
+                )
+
+        # AL reference curve — COMET (Jones-Jordan et al. 2018)
+        if "Age" in al_pat.columns:
+            al_first = al_pat.dropna(subset=["AL_OD", "Age"]).sort_values("DateMesure")
+            if not al_first.empty:
+                row0 = al_first.iloc[0]
+                al_ref_dates, al_ref_vals = _build_al_reference_curve(
+                    date_start=row0["DateMesure"],
+                    age_start=float(row0["Age"]),
+                    al_start=float(row0["AL_OD"]),
+                    date_end=al_pat["DateMesure"].max(),
+                )
+                ax2.plot(al_ref_dates, al_ref_vals,
+                         color="#86efac", linewidth=1.5, linestyle=":",
+                         alpha=0.75, zorder=2,
+                         label="Patient type AL (COMET)")
+                al_ref_patch = plt.Line2D([], [], color="#86efac", linewidth=1.5,
+                                          linestyle=":", alpha=0.75,
+                                          label="Patient type AL (COMET)")
+
         ax2.set_ylabel("Longueur axiale (mm)", color="#94a3b8", fontsize=10)
         ax2.tick_params(colors="#64748b", labelsize=9)
         ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f} mm"))
@@ -676,8 +737,9 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
     extra_labels = [p.get_label() for p in extra]
     if has_al:
         h2, l2 = ax2.get_legend_handles_labels()
-        ax.legend(handles + extra + h2,
-                  labels_leg + extra_labels + l2,
+        al_extra = [al_ref_patch] if al_ref_patch else []
+        ax.legend(handles + extra + h2 + al_extra,
+                  labels_leg + extra_labels + l2 + [p.get_label() for p in al_extra],
                   loc="lower left", fontsize=8, framealpha=0.25,
                   facecolor="#0f172a", edgecolor="#1e293b", labelcolor="#94a3b8")
     else:
