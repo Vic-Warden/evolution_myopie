@@ -23,8 +23,6 @@ DOSSIER_PDF       = r"c:\Stage\database\donnés_pdf"
 
 PATIENT_IDS  = None  # [1758507609] = forcer 
 TYPEREF      = 7      # 7 = Réfraction subjective 6 = Réfraction automatique, None = tous types
-MODE_COHORTE = False
-OEIL_COHORTE = "D"
 SAUVEGARDER  = False
 
 
@@ -767,243 +765,6 @@ def plot_patient(df, code_patient, df_al=None, save=False, output_dir="."):
         plt.show()
     plt.close(fig)
 
-    pat = df[df["CodePatient"] == str(code_patient)].dropna(subset=["Date"]).copy()
-    pat = pat[pat[["SE_D", "SE_G"]].notna().any(axis=1)].sort_values("Date")
-
-    if pat.empty:
-        log.warning(f"  Aucune donnée valide pour le patient {code_patient}")
-        return
-
-    nom    = pat["NOM"].iloc[0]    if "NOM"    in pat.columns else "?"
-    prenom = pat["Prenom"].iloc[0] if "Prenom" in pat.columns else ""
-    n_pts  = len(pat)
-
-    # Biométrie
-    al_pat = pd.DataFrame()
-    if df_al is not None and not df_al.empty:
-        al_pat = df_al[df_al["CodePatient"] == str(code_patient)].dropna(subset=["DateMesure"])
-    has_al = not al_pat.empty
-
-    # Figure
-    fig, ax = plt.subplots(figsize=(13, 6))
-    ax2 = ax.twinx() if has_al else None
-    fig.patch.set_facecolor("#0f172a")
-    ax.set_facecolor("#111827")
-    ax.grid(True, color="#1e293b", linewidth=0.8, zorder=0)
-    ax.set_axisbelow(True)
-
-    all_se = pd.concat([pat["SE_D"].dropna(), pat["SE_G"].dropna()])
-    ymin = all_se.min() - 0.5
-    ymax = all_se.max() + 0.5
-    _add_severity_zones(ax, ymin, ymax)
-
-    # Courbes SE
-    for eye in ("D", "G"):
-        col = f"SE_{eye}"
-        sub = pat.dropna(subset=[col])
-        if sub.empty: continue
-        ax.plot(sub["Date"], sub[col], zorder=3, **STYLE[eye])
-
-        # Label each intermediate point
-        for _, row in sub.iloc[:-1].iterrows():
-            ax.annotate(
-                f"{row[col]:+.2f}",
-                xy=(row["Date"], row[col]),
-                xytext=(0, 9 if eye == "D" else -13),
-                textcoords="offset points", fontsize=7,
-                color=STYLE[eye]["color"], ha="center", zorder=4,
-            )
-
-        # Last point: OD label above, OG label below to avoid overlap
-        last = sub.iloc[-1]
-        y_offset = 22 if eye == "D" else -38
-        ax.annotate(
-            f"{last[col]:+.2f} D\n{_severity_label(last[col])}",
-            xy=(last["Date"], last[col]),
-            xytext=(10, y_offset),
-            textcoords="offset points", fontsize=8,
-            color=STYLE[eye]["color"],
-            bbox=dict(boxstyle="round,pad=0.3", fc="#0f172a", ec=STYLE[eye]["color"], alpha=0.85),
-            arrowprops=dict(arrowstyle="-", color=STYLE[eye]["color"], alpha=0.5),
-        )
-
-    zone_patches = [
-        mpatches.Patch(color=c, alpha=0.35, label=lbl)
-        for _, _, c, lbl in SEVERITY_ZONES
-    ]
-
-    # SE reference curve — COMET (Jones-Jordan et al. 2010 / 2018)
-    ref_patch = None
-    if "Age" in pat.columns and "DateNaissance" in pat.columns:
-        first = pat.dropna(subset=["SE_D"]).iloc[0] if not pat.dropna(subset=["SE_D"]).empty else None
-        if first is not None and pd.notna(first["Age"]) and pd.notna(first["SE_D"]):
-            ref_dates, ref_vals = _build_se_reference_curve(
-                date_start=first["Date"],
-                age_start=float(first["Age"]),
-                se_start=float(first["SE_D"]),
-                date_end=pat["Date"].max(),
-            )
-            ax.plot(ref_dates, ref_vals,
-                    color="#34d399", linewidth=1.5, linestyle="--",
-                    alpha=0.75, zorder=2, label="Patient type équivalent sphérique (COMET)")
-            ref_patch = plt.Line2D([], [], color="#34d399", linewidth=1.5,
-                                   linestyle="--", alpha=0.75,
-                                   label="Patient type équivalent sphérique (COMET)")
-
-    # AL curves — connecting lines + value label on every point + COMET reference
-    al_ref_patch = None
-    if has_al:
-        for al_col, marker, color, label in [
-            ("AL_OD", "^", "#a78bfa", "Longueur axiale OD (mm)"),
-            ("AL_OG", "v", "#f472b6", "Longueur axiale OG (mm)"),
-        ]:
-            al_sub = al_pat.dropna(subset=[al_col])
-            if al_sub.empty:
-                continue
-            ax2.plot(al_sub["DateMesure"], al_sub[al_col],
-                     marker=marker, color=color, linewidth=1.6,
-                     markersize=7, linestyle="--", label=label)
-
-            # Value label on every AL point
-            for _, row in al_sub.iterrows():
-                y_off = 9 if al_col == "AL_OD" else -13
-                ax2.annotate(
-                    f"{row[al_col]:.2f}",
-                    xy=(row["DateMesure"], row[al_col]),
-                    xytext=(0, y_off),
-                    textcoords="offset points", fontsize=7,
-                    color=color, ha="center", zorder=4,
-                )
-
-        # AL reference curve — COMET (Jones-Jordan et al. 2018)
-        # Age is read from the SE dataframe (pat) matched on the closest date,
-        # so no Age column is required in df_al.
-        al_first = al_pat.dropna(subset=["AL_OD"]).sort_values("DateMesure")
-        if not al_first.empty and "Age" in pat.columns:
-            first_al_date = al_first.iloc[0]["DateMesure"]
-            # Find the SE visit closest to the first AL measurement to get age.
-            pat_with_age = pat.dropna(subset=["Age"])
-            if not pat_with_age.empty:
-                closest_idx = (pat_with_age["Date"] - first_al_date).abs().idxmin()
-                age_at_first_al = float(pat_with_age.loc[closest_idx, "Age"])
-                al_ref_dates, al_ref_vals = _build_al_reference_curve(
-                    date_start=first_al_date,
-                    age_start=age_at_first_al,
-                    al_start=float(al_first.iloc[0]["AL_OD"]),
-                    date_end=al_pat["DateMesure"].max(),
-                )
-                ax2.plot(al_ref_dates, al_ref_vals,
-                         color="#86efac", linewidth=1.5, linestyle=":",
-                         alpha=0.75, zorder=2,
-                         label="Patient type longueur axiale (COMET)")
-                al_ref_patch = plt.Line2D([], [], color="#86efac", linewidth=1.5,
-                                          linestyle=":", alpha=0.75,
-                                          label="Patient type longueur axiale (COMET)")
-
-        ax2.set_ylabel("Longueur axiale (mm)", color="#94a3b8", fontsize=10)
-        ax2.tick_params(colors="#64748b", labelsize=9)
-        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.2f} mm"))
-        for spine in ax2.spines.values(): spine.set_edgecolor("#1e293b")
-
-    # Axes
-    _axe_x(ax, pat["Date"].min(), pat["Date"].max())
-    ax.set_ylim(ymin, ymax)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:+.1f} D"))
-    ax.tick_params(colors="#64748b", labelsize=9)
-    for spine in ax.spines.values(): spine.set_edgecolor("#1e293b")
-
-    ax.set_xlabel("Date de consultation", color="#94a3b8", fontsize=10, labelpad=8)
-    ax.set_ylabel("Équivalent sphérique (dioptries)", color="#94a3b8", fontsize=10, labelpad=8)
-
-    title = f"Évolution de la myopie — {prenom} {nom}".strip()
-    if "Age" in pat.columns:
-        ages = pat["Age"].dropna()
-        ages = ages[ages > 0]
-        if not ages.empty:
-            title += f"  ({ages.min():.0f}→{ages.max():.0f} ans)"
-    ax.set_title(title, color="#e2e8f0", fontsize=13, fontweight="bold", pad=14)
-
-    # Légende
-    handles, labels_leg = ax.get_legend_handles_labels()
-    extra = zone_patches + ([ref_patch] if ref_patch else [])
-    extra_labels = [p.get_label() for p in extra]
-    if has_al:
-        h2, l2 = ax2.get_legend_handles_labels()
-        al_extra = [al_ref_patch] if al_ref_patch else []
-        ax.legend(handles + extra + h2 + al_extra,
-                  labels_leg + extra_labels + l2 + [p.get_label() for p in al_extra],
-                  loc="lower left", fontsize=8, framealpha=0.25,
-                  facecolor="#0f172a", edgecolor="#1e293b", labelcolor="#94a3b8")
-    else:
-        ax.legend(handles + extra,
-                  labels_leg + extra_labels,
-                  loc="lower left", fontsize=8, framealpha=0.25,
-                  facecolor="#0f172a", edgecolor="#1e293b", labelcolor="#94a3b8")
-
-    # Stats
-    seD    = pat["SE_D"].dropna()
-    seG    = pat["SE_G"].dropna()
-    prog_D = (seD.iloc[-1] - seD.iloc[0]) if len(seD) > 1 else float("nan")
-    duree  = (pat["Date"].max() - pat["Date"].min()).days / 365.25
-    ax.text(0.99, 0.97,
-            f"n={n_pts} mesures  |  durée {duree:.1f} ans\n"
-            f"OD : {seD.min():+.2f} D → {seD.max():+.2f} D  (Δ {prog_D:+.2f} D)",
-            transform=ax.transAxes, ha="right", va="top",
-            fontsize=8, color="#64748b", fontfamily="monospace",
-            bbox=dict(boxstyle="round,pad=0.4", fc="#0f172a", ec="#1e293b", alpha=0.7))
-
-    plt.tight_layout()
-    if save:
-        outpath = Path(output_dir) / f"myopie_patient_{code_patient}.png"
-        fig.savefig(outpath, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        log.info(f"  Sauvegardé : {outpath}")
-    else:
-        plt.show()
-    plt.close(fig)
-
-
-def plot_cohort(df, patient_ids=None, eye="D", save=False, output_dir="."):
-    ids    = patient_ids or sorted(df["CodePatient"].unique())
-    se_col = f"SE_{eye}"
-
-    fig, ax = plt.subplots(figsize=(14, 7))
-    fig.patch.set_facecolor("#0f172a")
-    ax.set_facecolor("#111827")
-    ax.grid(True, color="#1e293b", linewidth=0.8, zorder=0)
-    ax.set_axisbelow(True)
-
-    all_se = df[se_col].dropna()
-    if not all_se.empty:
-        _add_severity_zones(ax, all_se.min() - 0.5, all_se.max() + 0.5)
-
-    cmap = plt.colormaps["tab20"](range(len(ids)))
-    for color, pid in zip(cmap, ids):
-        sub = df[df["CodePatient"] == str(pid)].dropna(subset=["Date", se_col]).sort_values("Date")
-        if sub.empty: continue
-        nom = sub["NOM"].iloc[0]    if "NOM"    in sub.columns else str(pid)
-        prn = sub["Prenom"].iloc[0] if "Prenom" in sub.columns else ""
-        ax.plot(sub["Date"], sub[se_col], marker="o", markersize=4,
-                linewidth=1.6, color=color, alpha=0.85, label=f"{prn} {nom}".strip())
-
-    _axe_x(ax, df["Date"].min(), df["Date"].max())
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:+.1f} D"))
-    ax.tick_params(colors="#64748b", labelsize=9)
-    for spine in ax.spines.values(): spine.set_edgecolor("#1e293b")
-    ax.set_xlabel("Date", color="#94a3b8", fontsize=10)
-    ax.set_ylabel(f"SE œil {'droit' if eye=='D' else 'gauche'} (D)", color="#94a3b8", fontsize=10)
-    ax.set_title(f"Évolution comparative — Cohorte ({len(ids)} patients)",
-                 color="#e2e8f0", fontsize=13, fontweight="bold")
-    ax.legend(fontsize=8, framealpha=0.2, facecolor="#0f172a",
-              edgecolor="#1e293b", labelcolor="#e2e8f0", ncol=2)
-    plt.tight_layout()
-    if save:
-        outpath = Path(output_dir) / "myopie_cohorte.png"
-        fig.savefig(outpath, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        log.info(f"  Sauvegardé : {outpath}")
-    else:
-        plt.show()
-    plt.close(fig)
-
 
 # 6. SÉLECTION INTERACTIVE
 
@@ -1071,17 +832,10 @@ def choisir_patients(df: pd.DataFrame) -> list[str]:
 # 7. POINT D'ENTRÉE
 
 def main():
-    log.info("=" * 70)
-    log.info("  Suivi myopie — démarrage")
-    log.info(f"  Log : {_LOG_FILE}")
-    log.info("=" * 70)
+    log.info("Suivi myopie — démarrage")
+    log.info(f"Log : {_LOG_FILE}")
 
-    # -------------------------------------------------------------------------
-    # PRODUCTION PATTERN 3 — Path availability guard
-    # Check that FICHIER_MDB and DOSSIER_PDF are reachable before doing anything
-    # else.  Useful when the database or PDF folder lives on a NAS that may take
-    # a few seconds to mount on Windows startup.
-    # -------------------------------------------------------------------------
+    # Wait for the MDB and PDF paths to be reachable (useful on NAS mounts).
     if not wait_for_path(FICHIER_MDB, label="MDB"):
         log.error("Cannot reach FICHIER_MDB — aborting.")
         sys.exit(1)
@@ -1089,15 +843,9 @@ def main():
     if not wait_for_path(DOSSIER_PDF, label="PDF"):
         log.error("Cannot reach DOSSIER_PDF — aborting.")
         sys.exit(1)
-    # -------------------------------------------------------------------------
 
-    # -------------------------------------------------------------------------
-    # PRODUCTION PATTERN 2 — COM auto-detection of the active patient
-    # If Access is open and a patient record is displayed, bypass the
-    # interactive menu and generate the chart directly for that patient.
-    # Falls back to choisir_patients() if Access is closed or no patient is
-    # open.
-    # -------------------------------------------------------------------------
+    # Try to detect the active patient from Access via COM Interop.
+    # Falls back to the interactive menu if Access is closed or unavailable.
     ids_config = [str(i) for i in PATIENT_IDS] if PATIENT_IDS else None
     active_patient = get_active_patient()
 
@@ -1113,7 +861,6 @@ def main():
         if _WIN32_AVAILABLE:
             log.info("COM auto-detection: aucun patient ouvert dans Access — menu interactif.")
         auto_detect = False
-    # -------------------------------------------------------------------------
 
     # Chargement depuis MDB
     df_pat, df_con, df_ref = load_all_tables(patient_ids=ids_config)
@@ -1140,13 +887,9 @@ def main():
 
     # Visualisation
     print()
-    if MODE_COHORTE:
-        log.info(f"▶ Courbe cohorte ({len(ids)} patients, œil {OEIL_COHORTE})…")
-        plot_cohort(df, patient_ids=ids, eye=OEIL_COHORTE, save=SAUVEGARDER)
-    else:
-        log.info(f"▶ Tracé individuel de {len(ids)} patient(s)…")
-        for pid in ids:
-            plot_patient(df, pid, df_al=df_al, save=SAUVEGARDER)
+    log.info(f"▶ Tracé individuel de {len(ids)} patient(s)…")
+    for pid in ids:
+        plot_patient(df, pid, df_al=df_al, save=SAUVEGARDER)
 
     log.info("✓ Terminé.")
 
