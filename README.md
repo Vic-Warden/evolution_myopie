@@ -32,10 +32,11 @@ Ce projet traite trois étapes clés du suivi ophtalmologique :
 
 Connects directly to the Access database (`PUBLIC.MDB`) and the biometry PDF folder, then:
 - Reads refractions from `tREFRACTION`, joined with `Consultation` and `Patients`
+- Filters patients under 25 years old with at least 2 distinct measurement dates
 - Extracts axial length (AL) from `MMT-Full_*.pdf` files via the `Documents` table
 - Plots individual longitudinal SE + AL curves with COMET normative reference curves
-- Plots a cohort comparison chart (optional, set `MODE_COHORTE = True`)
 - Auto-detects the active patient from the open Access form via COM (Windows only)
+- Waits for NAS/network paths to become available before proceeding
 - Saves charts to PNG if `SAUVEGARDER = True`
 
 **Key configuration constants (top of file):**
@@ -45,7 +46,6 @@ Connects directly to the Access database (`PUBLIC.MDB`) and the biometry PDF fol
 | `DOSSIER_PDF` | Folder containing the biometry PDFs |
 | `PATIENT_IDS` | Force specific patient IDs (or `None` for interactive menu) |
 | `TYPEREF` | Refraction type filter (`7` = subjective, `6` = auto, `None` = all) |
-| `MODE_COHORTE` | `True` = cohort chart, `False` = individual charts |
 | `SAUVEGARDER` | `True` = save PNG, `False` = display |
 
 **Dependencies:** `pandas`, `matplotlib`, `pyodbc`, `pdfplumber`, `pywin32` (optional, COM only)
@@ -67,7 +67,6 @@ PUBLIC.MDB (Access)
     suivi_myopie.py
              ↓
     Individual chart (SE + AL + COMET reference)
-    or Cohort comparison chart
 ```
 
 ---
@@ -100,7 +99,6 @@ python suivi_myopie.py
 - **Interactive menu:** leave `PATIENT_IDS = None` → search by name or ID
 - **Force a patient:** set `PATIENT_IDS = [1758507609]`
 - **COM auto-detection (Windows):** if Access is open with a patient record, the chart is generated automatically without any prompt
-- **Cohort mode:** set `MODE_COHORTE = True`
 - **Save PNG:** set `SAUVEGARDER = True` → files written next to the script
 
 ---
@@ -123,7 +121,6 @@ The script reads directly from the Access database — no intermediate CSV/JSON 
 
 - **Suivi myopique** : visualiser la progression de la myopie chez un patient
 - **Analyse AL** : détecter l'allongement axial anormal (facteur clé de la myopie)
-- **Recherche cohorte** : comparer l'évolution réfractive entre plusieurs patients
 - **Génération de rapports** : exporter les graphes en PNG
 
 ---
@@ -133,7 +130,6 @@ The script reads directly from the Access database — no intermediate CSV/JSON 
 | Problème | Solution |
 |----------|----------|
 | Aucun PDF trouvé | Vérifier `DOSSIER_PDF` et le pattern `MMT-Full_*.pdf` |
-| Erreur JSON encoding | Vérifier que les fichiers JSON sont en UTF-8 |
 | Graphe vide | Vérifier les dates et que `DateMesure` n'est pas null |
 | Dates mal parsées | Adapter `_parse_dob()` au format de vos données |
 | Cannot connect to MDB | Install Access Database Engine 2016 (64-bit) and check `FICHIER_MDB` path |
