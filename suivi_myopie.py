@@ -16,9 +16,7 @@ import logging
 import os
 from pathlib import Path
 
-# ═════════════════════════════════════════════════════════════════════════════
 # ▶▶  CONFIGURATION
-# ═════════════════════════════════════════════════════════════════════════════
 
 FICHIER_MDB       = r"C:\Stage\database\baseSQL\PUBLIC.MDB"
 DOSSIER_PDF       = r"c:\Stage\database\donnés_pdf"
@@ -29,7 +27,6 @@ MODE_COHORTE = False
 OEIL_COHORTE = "D"
 SAUVEGARDER  = False
 
-# ═════════════════════════════════════════════════════════════════════════════
 
 # Write logs to both the console and ~/evolution_myopie/suivi.log
 _LOG_DIR  = os.path.join(os.path.expanduser("~"), "evolution_myopie")
@@ -155,9 +152,7 @@ def wait_for_path(path: str, label: str = "") -> bool:
         time.sleep(_PATH_POLL_INTERVAL)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 1. LECTURE BASE MDB
-# ─────────────────────────────────────────────────────────────────────────────
 
 def connect_mdb(chemin: str) -> pyodbc.Connection:
     conn_str = (
@@ -200,9 +195,7 @@ def load_all_tables(patient_ids: list[str] | None = None):
     log.info(f"  patients={len(df_pat)}  consultations={len(df_con)}  réfractions={len(df_ref)}")
     return df_pat, df_con, df_ref
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 2. UTILITAIRES
-# ─────────────────────────────────────────────────────────────────────────────
 
 def parse_fr_float(series: pd.Series) -> pd.Series:
     return (
@@ -237,9 +230,7 @@ def _parse_dob(val) -> "pd.Timestamp":
     return ts if pd.notna(ts) else pd.NaT
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 3. CONSTRUCTION DE L'HISTORIQUE
-# ─────────────────────────────────────────────────────────────────────────────
 
 def build_history(
     df_patients: pd.DataFrame,
@@ -318,9 +309,7 @@ def build_history(
     glasses_patients = set(ref_full[glasses_mask]["CodePatient"].astype(str).unique())
 
     # Print the list of retained patients
-    log.info("\n" + "═" * 70)
     log.info("  PATIENTS UNDER 25 WITH AT LEAST 2 MEASUREMENTS")
-    log.info("═" * 70)
 
     for pid in valid_patients:
 
@@ -334,15 +323,12 @@ def build_history(
         wears_glasses = "Yes" if str(pid) in glasses_patients else "Unknown/No"
 
         log.info(f"  ID: {pid:<10} | {pat_info['Prenom']:<10} {pat_info['NOM']:<15} | {nb_measurements} measurements | Glasses: {wears_glasses}")
-    log.info("═" * 70 + "\n")
 
     log.info(f"  Historique : {len(full)} lignes, {full['CodePatient'].nunique()} patients")
     return full
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 4. BIOMÉTRIE — extraction depuis Documents.json + PDFs
-# ─────────────────────────────────────────────────────────────────────────────
 
 RE_AL        = re.compile(r"Comp\.\s*AL\s*:\s*([\d.]+)\s*mm")
 RE_DATE_PDF  = re.compile(r"Date de mesure\s*[^:]*:\s*(\d{2}/\d{2}/\d{4})")
@@ -446,9 +432,7 @@ def load_biometrie(patient_ids: list[str] | None = None) -> pd.DataFrame:
     return df_al
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 5. VISUALISATION
-# ─────────────────────────────────────────────────────────────────────────────
 
 SEVERITY_ZONES = [
     (0,   -3,  "#f59e0b", "Myopie faible (0→−3 D)"),
@@ -1021,9 +1005,7 @@ def plot_cohort(df, patient_ids=None, eye="D", save=False, output_dir="."):
     plt.close(fig)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 6. SÉLECTION INTERACTIVE
-# ─────────────────────────────────────────────────────────────────────────────
 
 def choisir_patients(df: pd.DataFrame) -> list[str]:
     tous  = sorted(df["CodePatient"].unique())
@@ -1043,7 +1025,7 @@ def choisir_patients(df: pd.DataFrame) -> list[str]:
             print(f"  → Tous les patients ({total})")
             return [str(p) for p in tous]
 
-        # ── Recherche par nom/prénom ──────────────────────────────────────────
+        # Recherche par nom/prénom
         if not saisie.replace(",", "").replace(";", "").replace(" ", "").isdigit():
             terme = saisie.upper()
             correspondances = [
@@ -1069,7 +1051,7 @@ def choisir_patients(df: pd.DataFrame) -> list[str]:
                 print(f"  ⚠  Aucun patient trouvé pour '{saisie}'")
                 continue
 
-        # ── Saisie par ID ────────────────────────────────────────────────────
+        # Saisie par ID
         morceaux = [m.strip() for m in saisie.replace(";", ",").split(",") if m.strip()]
         ids_valides, erreurs = [], []
         for m in morceaux:
@@ -1086,9 +1068,7 @@ def choisir_patients(df: pd.DataFrame) -> list[str]:
         return ids_valides
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 7. POINT D'ENTRÉE
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     log.info("=" * 70)
